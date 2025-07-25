@@ -95,26 +95,9 @@ class TelegramAdapter:
 
         return False
 
-    def _sanitize_message(self, text: str) -> str:
-        """Sanitiza el mensaje para evitar problemas con Telegram"""
-        if not text:
-            return "Mensaje vacío"
-
-        # Limitar longitud (Telegram tiene límite de 4096 caracteres)
-        if len(text) > 4000:
-            text = text[:3950] + "\n\n... (mensaje truncado por longitud)"
-
-        # Remover caracteres de control problemáticos
-        import re
-        # Remover caracteres de control excepto \n y \t
-        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
-
-        # Limpiar múltiples saltos de línea
-        text = re.sub(r'\n{4,}', '\n\n\n', text)
-
-        return text
+    def _clean_mention_from_text(self, text: str) -> str:
         """Limpia las menciones del texto para procesamiento"""
-        if not self.bot_username:
+        if not self.bot_username or not text:
             return text
 
         # Remover @username del texto
@@ -125,6 +108,9 @@ class TelegramAdapter:
             text,
             flags=re.IGNORECASE
         ).strip()
+
+        # Limpiar espacios múltiples
+        cleaned_text = " ".join(cleaned_text.split())
 
         return cleaned_text
 
@@ -138,7 +124,6 @@ class TelegramAdapter:
             text = text[:3950] + "\n\n... (mensaje truncado por longitud)"
 
         # Remover caracteres de control problemáticos
-        import re
         # Remover caracteres de control excepto \n y \t
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
 
