@@ -47,6 +47,9 @@ Usa emojis para mejorar legibilidad en WhatsApp/Telegram
 Separa secciones con líneas en blanco
 
 Estructura Obligatoria:
+
+**SIEMPRE RESPONDE EN ESPAÑOL**
+
 TÍTULO PRINCIPAL: 📡
 Respuesta directa y concisa aquí.
 
