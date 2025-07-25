@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # Redis para sesiones
+  redis:
+    image: redis:7-alpine
+    container_name: bot-agent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - bot-network
+
+  # Bot Agent
+  bot-agent:
+    build: .
+    container_name: bot-agent-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Redis (usar nombre del servicio)
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      # Open Web UI (host.docker.internal para acceder al host)
+      - OPENWEBUI_BASE_URL=http://host.docker.internal:8080
+
+      # API
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+
+      # Cargar desde .env para tokens de plataformas
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - DISCORD_APPLICATION_ID=${DISCORD_APPLICATION_ID:-}
+
+      # Model config
+      - MODEL_NAME=${MODEL_NAME:-llama2}
+      - MODEL_TIMEOUT=${MODEL_TIMEOUT:-60}
+      - MODEL_TEMPERATURE=${MODEL_TEMPERATURE:-0.7}
+
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - bot-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Redis Commander (opcional - interfaz web para Redis)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: bot-agent-redis-ui
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - bot-network
+    profiles:
+      - debug
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  bot-network:
+    driver: bridge
+
+# Para desarrollo con logs en tiempo real:
+# docker-compose up --build
+#
+# Para producción en background:
+# docker-compose up -d --build
+#
+# Para incluir Redis Commander (interfaz web):
+# docker-compose --profile debug up -d
+#
+# Ver logs:
+# docker-compose logs -f bot-agent
+# docker-compose logs -f redis
