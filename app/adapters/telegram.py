@@ -95,7 +95,24 @@ class TelegramAdapter:
 
         return False
 
-    def _clean_mention_from_text(self, text: str) -> str:
+    def _sanitize_message(self, text: str) -> str:
+        """Sanitiza el mensaje para evitar problemas con Telegram"""
+        if not text:
+            return "Mensaje vacío"
+
+        # Limitar longitud (Telegram tiene límite de 4096 caracteres)
+        if len(text) > 4000:
+            text = text[:3950] + "\n\n... (mensaje truncado por longitud)"
+
+        # Remover caracteres de control problemáticos
+        import re
+        # Remover caracteres de control excepto \n y \t
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+
+        # Limpiar múltiples saltos de línea
+        text = re.sub(r'\n{4,}', '\n\n\n', text)
+
+        return text
         """Limpia las menciones del texto para procesamiento"""
         if not self.bot_username:
             return text
@@ -110,6 +127,25 @@ class TelegramAdapter:
         ).strip()
 
         return cleaned_text
+
+    def _sanitize_message(self, text: str) -> str:
+        """Sanitiza el mensaje para evitar problemas con Telegram"""
+        if not text:
+            return "Mensaje vacío"
+
+        # Limitar longitud (Telegram tiene límite de 4096 caracteres)
+        if len(text) > 4000:
+            text = text[:3950] + "\n\n... (mensaje truncado por longitud)"
+
+        # Remover caracteres de control problemáticos
+        import re
+        # Remover caracteres de control excepto \n y \t
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
+
+        # Limpiar múltiples saltos de línea
+        text = re.sub(r'\n{4,}', '\n\n\n', text)
+
+        return text
 
     def _get_session_id(self, chat_id: int, user_id: int, chat_type: str) -> str:
         """Genera session ID apropiado según el tipo de chat"""
@@ -266,6 +302,9 @@ class TelegramAdapter:
             if chat_type == "group":
                 response = f"{user_name}, {response}"
 
+            # Sanitizar mensaje antes de enviar
+            response = self._sanitize_message(response)
+
             # Enviar respuesta
             await self._send_message(chat_id, response)
             logger.info(f"✅ Respuesta enviada a {user_name} en {chat_type}")
@@ -279,33 +318,64 @@ class TelegramAdapter:
 
             await self._send_message(chat_id, error_response)
 
-    async def _send_message(self, chat_id: int, text: str, parse_mode: str = "Markdown"):
-        """Envía un mensaje a Telegram"""
+    async def _send_message(self, chat_id: int, text: str, parse_mode: str = None):
+        """Envía un mensaje a Telegram con manejo robusto de errores"""
         if not self.base_url:
             logger.error("❌ No se puede enviar mensaje: bot_token no configurado")
             return False
 
         url = f"{self.base_url}/sendMessage"
 
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode
-        }
+        # Función para escapar caracteres de Markdown
+        def escape_markdown(text: str) -> str:
+            """Escapa caracteres especiales de Markdown V2"""
+            # Caracteres que necesitan escape en Markdown V2
+            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            for char in special_chars:
+                text = text.replace(char, f'\\{char}')
+            return text
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload)
+        # Intentar enviar con diferentes modos de parse
+        attempts = [
+            {"parse_mode": None, "text": text},  # Sin formato
+            {"parse_mode": "HTML", "text": text.replace("**", "<b>").replace("**", "</b>")},  # HTML básico
+            {"parse_mode": "MarkdownV2", "text": escape_markdown(text)},  # Markdown escapado
+        ]
 
-                if response.status_code == 200:
-                    return True
-                else:
-                    logger.error(f"Error enviando mensaje Telegram: {response.status_code} - {response.text}")
-                    return False
+        for attempt in attempts:
+            payload = {
+                "chat_id": chat_id,
+                "text": attempt["text"]
+            }
 
-        except Exception as e:
-            logger.error(f"Error de conexión enviando mensaje Telegram: {e}")
-            return False
+            if attempt["parse_mode"]:
+                payload["parse_mode"] = attempt["parse_mode"]
+
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.post(url, json=payload)
+
+                    if response.status_code == 200:
+                        return True
+                    else:
+                        # Si falla, intentar con el siguiente método
+                        error_msg = response.text
+                        logger.warning(
+                            f"Intento falló con {attempt.get('parse_mode', 'sin formato')}: {response.status_code}")
+
+                        # Si es el último intento, loguear el error
+                        if attempt == attempts[-1]:
+                            logger.error(
+                                f"Error enviando mensaje Telegram (todos los intentos fallaron): {response.status_code} - {error_msg}")
+                        continue
+
+            except Exception as e:
+                logger.warning(f"Error de conexión en intento {attempt.get('parse_mode', 'sin formato')}: {e}")
+                continue
+
+        # Si llegamos aquí, todos los intentos fallaron
+        logger.error(f"❌ No se pudo enviar mensaje después de {len(attempts)} intentos")
+        return False
 
     async def _send_typing_action(self, chat_id: int):
         """Envía acción de 'escribiendo'"""
