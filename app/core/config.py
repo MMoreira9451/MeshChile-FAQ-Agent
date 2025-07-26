@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     WHATSAPP_VERIFY_TOKEN: Optional[str] = None
     WHATSAPP_ACCESS_TOKEN: Optional[str] = None
     WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
-    WHATSAPP_PREFERRED_METHOD: str = "api"  # "auto", "api", "web"
+    WHATSAPP_PREFERRED_METHOD: str = "auto"  # "auto", "api", "web"
 
     # Platform Tokens - Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None
@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # Platform Tokens - Discord
     DISCORD_BOT_TOKEN: Optional[str] = None
     DISCORD_APPLICATION_ID: Optional[str] = None
+    DISCORD_GUILD_ID: Optional[int] = None
+    DISCORD_CHANNEL_ID: Optional[int] = None
 
     # Model Configuration
     MODEL_TIMEOUT: int = 60

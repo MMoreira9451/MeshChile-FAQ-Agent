@@ -22,7 +22,7 @@ app = FastAPI(
     title=settings.API_TITLE,
     version=settings.API_VERSION,
     debug=settings.API_DEBUG,
-    description="Backend universal para bot multi-plataforma con Open Web UI, Redis, Telegram y WhatsApp integrados"
+    description="Backend universal para bot multi-plataforma con Open Web UI, Redis, Telegram, WhatsApp y Discord integrados"
 )
 
 # Configurar CORS
@@ -38,12 +38,13 @@ app.add_middleware(
 agent: BotAgent = None
 telegram_manager = None
 whatsapp_manager = None
+discord_manager = None
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Inicialización al arrancar - incluye Telegram y WhatsApp automáticamente"""
-    global agent, telegram_manager, whatsapp_manager
+    """Inicialización al arrancar - incluye todas las plataformas automáticamente"""
+    global agent, telegram_manager, whatsapp_manager, discord_manager
     logger.info("🚀 Iniciando Bot Agent con múltiples plataformas...")
 
     print(f"📡 API: {settings.API_HOST}:{settings.API_PORT}")
@@ -97,6 +98,31 @@ async def startup_event():
         except Exception as e:
             logger.error(f"❌ Error inicializando WhatsApp: {e}")
 
+        # Inicializar Discord automáticamente
+        if settings.DISCORD_BOT_TOKEN:
+            try:
+                logger.info("🎮 Inicializando Discord...")
+                from .core.discord_manager import DiscordManager
+
+                discord_manager = DiscordManager(agent)
+                await discord_manager.initialize()
+
+                status = discord_manager.get_status()
+                if status.get("status") == "running":
+                    logger.info("✅ Discord inicializado correctamente")
+                else:
+                    logger.info("ℹ️ Discord configurado pero falló inicialización")
+
+            except ImportError as e:
+                logger.error(f"❌ Error importando DiscordManager: {e}")
+                logger.error("💡 Faltan archivos de Discord:")
+                logger.error("   - app/core/discord_manager.py")
+                logger.error("   - app/adapters/discord.py")
+            except Exception as e:
+                logger.error(f"❌ Error inicializando Discord: {e}")
+        else:
+            logger.info("ℹ️ Discord no configurado (DISCORD_BOT_TOKEN faltante)")
+
         # Verificar conectividad general
         health = await agent.health_check()
         if health["status"] != "healthy":
@@ -125,6 +151,16 @@ async def startup_event():
                 print("💬 WhatsApp: ⚠️ No configurado o falló")
         else:
             print("💬 WhatsApp: ⚠️ No inicializado (archivos faltantes)")
+
+        # Estado de Discord
+        if discord_manager and discord_manager.get_status().get("status") == "running":
+            print("🎮 Discord: ✅ Activo y funcionando")
+            guild_config = f" en servidor {settings.DISCORD_GUILD_ID}" if settings.DISCORD_GUILD_ID else " en todos los servidores"
+            channel_config = f" canal {settings.DISCORD_CHANNEL_ID}" if settings.DISCORD_CHANNEL_ID else " cualquier canal"
+            print(f"💡 Configurado para{guild_config},{channel_config}")
+        else:
+            print("🎮 Discord: ⚠️ No configurado o falló")
+
         print()
 
     except Exception as e:
@@ -134,8 +170,8 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Limpieza al cerrar - incluye Telegram y WhatsApp"""
-    global telegram_manager, whatsapp_manager
+    """Limpieza al cerrar - incluye todas las plataformas"""
+    global telegram_manager, whatsapp_manager, discord_manager
     logger.info("👋 Cerrando Bot Agent...")
 
     # Cerrar Telegram si está activo
@@ -152,6 +188,13 @@ async def shutdown_event():
         except Exception as e:
             logger.error(f"Error cerrando WhatsApp: {e}")
 
+    # Cerrar Discord si está activo
+    if discord_manager:
+        try:
+            await discord_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error cerrando Discord: {e}")
+
 
 def get_agent() -> BotAgent:
     """Dependency para obtener la instancia del agente"""
@@ -165,6 +208,7 @@ async def root():
     """Endpoint raíz con información del servicio"""
     telegram_status = "disabled"
     whatsapp_status = "disabled"
+    discord_status = "disabled"
 
     if telegram_manager:
         try:
@@ -181,6 +225,14 @@ async def root():
         except Exception:
             whatsapp_status = "error"
 
+    # Estado de Discord
+    if discord_manager:
+        try:
+            status = discord_manager.get_status()
+            discord_status = status.get("status", "unknown")
+        except Exception:
+            discord_status = "error"
+
     platforms_enabled = {
         "telegram": {
             "configured": bool(settings.TELEGRAM_BOT_TOKEN),
@@ -194,7 +246,10 @@ async def root():
         },
         "discord": {
             "configured": bool(settings.DISCORD_BOT_TOKEN),
-            "method": "webhook" if settings.DISCORD_BOT_TOKEN else "none"
+            "status": discord_status,
+            "method": "gateway" if settings.DISCORD_BOT_TOKEN else "none",
+            "guild_id": settings.DISCORD_GUILD_ID,
+            "channel_id": settings.DISCORD_CHANNEL_ID
         }
     }
 
@@ -210,14 +265,15 @@ async def root():
             "docs": "/docs",
             "sessions": "/sessions",
             "telegram_status": "/telegram/status",
-            "whatsapp_status": "/whatsapp/status"
+            "whatsapp_status": "/whatsapp/status",
+            "discord_status": "/discord/status"
         }
     }
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check(agent: BotAgent = Depends(get_agent)):
-    """Health check completo del sistema incluyendo Telegram y WhatsApp"""
+    """Health check completo del sistema incluyendo todas las plataformas"""
     try:
         health = await agent.health_check()
 
@@ -249,7 +305,8 @@ async def health_check(agent: BotAgent = Depends(get_agent)):
             try:
                 whatsapp_status = whatsapp_manager.get_status()
                 health["components"]["whatsapp"] = {
-                    "status": "healthy" if whatsapp_status.get("status") in ["running_api", "running_web"] else "inactive",
+                    "status": "healthy" if whatsapp_status.get("status") in ["running_api",
+                                                                             "running_web"] else "inactive",
                     "enabled": True,
                     "method": whatsapp_status.get("active_adapter", "none"),
                     "running": whatsapp_status.get("status") != "inactive"
@@ -273,8 +330,37 @@ async def health_check(agent: BotAgent = Depends(get_agent)):
                 ]
             }
 
+        # Añadir estado de Discord
+        if discord_manager:
+            try:
+                discord_status = discord_manager.get_status()
+                health["components"]["discord"] = {
+                    "status": "healthy" if discord_status.get("status") == "running" else "inactive",
+                    "enabled": discord_status.get("enabled", False),
+                    "running": discord_status.get("running", False),
+                    "guild_id": discord_status.get("guild_id"),
+                    "channel_id": discord_status.get("channel_id")
+                }
+            except Exception as e:
+                health["components"]["discord"] = {
+                    "status": "error",
+                    "enabled": False,
+                    "running": False,
+                    "error": str(e)
+                }
+        else:
+            health["components"]["discord"] = {
+                "status": "disabled",
+                "enabled": False,
+                "running": False,
+                "missing_files": [
+                    "app/core/discord_manager.py",
+                    "app/adapters/discord.py"
+                ]
+            }
+
         # El sistema está saludable si los componentes core están bien
-        # WhatsApp y Telegram son opcionales
+        # Las plataformas son opcionales
         core_healthy = (
                 health["components"]["openwebui"]["status"] == "healthy" and
                 health["components"]["redis"]["status"] == "healthy"
@@ -341,6 +427,36 @@ async def get_whatsapp_status():
         return {
             "status": "error",
             "message": f"Error getting WhatsApp status: {str(e)}"
+        }
+
+
+# Endpoints de Discord
+@app.get("/discord/status")
+async def get_discord_status():
+    """Estado específico de Discord"""
+    if not discord_manager:
+        return {
+            "status": "not_initialized",
+            "message": "Discord manager not initialized - missing required files",
+            "missing_files": [
+                "app/core/discord_manager.py",
+                "app/adapters/discord.py"
+            ]
+        }
+
+    try:
+        status = discord_manager.get_status()
+        return {
+            "discord": status,
+            "token_configured": bool(settings.DISCORD_BOT_TOKEN),
+            "guild_configured": bool(settings.DISCORD_GUILD_ID),
+            "channel_configured": bool(settings.DISCORD_CHANNEL_ID),
+            "message": "Discord is running via Gateway" if status.get("running") else "Discord is not active"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error getting Discord status: {str(e)}"
         }
 
 
@@ -412,6 +528,50 @@ async def restart_telegram():
     except Exception as e:
         logger.error(f"Error restarting Telegram: {e}")
         raise HTTPException(status_code=500, detail=f"Error restarting Telegram: {str(e)}")
+
+
+@app.post("/discord/restart")
+async def restart_discord():
+    """Reinicia el servicio de Discord"""
+    global discord_manager
+
+    if not settings.DISCORD_BOT_TOKEN:
+        raise HTTPException(status_code=400, detail="DISCORD_BOT_TOKEN not configured")
+
+    try:
+        if discord_manager:
+            await discord_manager.shutdown()
+
+        from .core.discord_manager import DiscordManager
+        discord_manager = DiscordManager(agent)
+        await discord_manager.initialize()
+
+        return {"message": "Discord restarted successfully", "status": discord_manager.get_status()}
+
+    except Exception as e:
+        logger.error(f"Error restarting Discord: {e}")
+        raise HTTPException(status_code=500, detail=f"Error restarting Discord: {str(e)}")
+
+
+@app.post("/discord/test-message")
+async def discord_test_message(request: dict):
+    """Envía un mensaje de prueba a Discord"""
+    if not discord_manager:
+        raise HTTPException(status_code=400, detail="Discord manager not initialized")
+
+    channel_id = request.get("channel_id")
+    message = request.get("message", "Test desde MeshChile Bot")
+
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="channel_id is required")
+
+    try:
+        result = await discord_manager.send_test_message(int(channel_id), message)
+        return result
+    except ValueError:
+        raise HTTPException(status_code=400, detail="channel_id must be a valid integer")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error sending test message: {str(e)}")
 
 
 @app.post("/chat", response_model=MessageResponse)
@@ -542,22 +702,6 @@ if settings.TELEGRAM_BOT_TOKEN:
                 return {"status": "error", "message": "Internal server error"}
         else:
             return {"status": "telegram_not_configured"}
-
-# Discord webhook
-if settings.DISCORD_BOT_TOKEN:
-    @app.post("/webhook/discord")
-    async def discord_webhook(
-            request: dict,
-            agent: BotAgent = Depends(get_agent)
-    ):
-        """Webhook para Discord interactions"""
-        try:
-            from .adapters.discord import DiscordAdapter
-            adapter = DiscordAdapter(agent)
-            return await adapter.handle_interaction(request)
-        except Exception as e:
-            logger.error(f"Error en webhook Discord: {e}")
-            return {"type": 4, "data": {"content": "Error interno del servidor"}}
 
 if __name__ == "__main__":
     uvicorn.run(
