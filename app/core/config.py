@@ -28,10 +28,11 @@ class Settings(BaseSettings):
     SESSION_TTL: int = 3600  # 1 hora
     MAX_SESSION_MESSAGES: int = 20
 
-    # Platform Tokens - WhatsApp
+    # Platform Tokens - WhatsApp Business API
     WHATSAPP_VERIFY_TOKEN: Optional[str] = None
     WHATSAPP_ACCESS_TOKEN: Optional[str] = None
     WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
+    WHATSAPP_PREFERRED_METHOD: str = "api"  # "auto", "api", "web"
 
     # Platform Tokens - Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None

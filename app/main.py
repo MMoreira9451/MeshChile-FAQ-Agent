@@ -1,5 +1,5 @@
 # app/main.py
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import logging
@@ -22,7 +22,7 @@ app = FastAPI(
     title=settings.API_TITLE,
     version=settings.API_VERSION,
     debug=settings.API_DEBUG,
-    description="Backend universal para bot multi-plataforma con Open Web UI, Redis y Telegram integrado"
+    description="Backend universal para bot multi-plataforma con Open Web UI, Redis, Telegram y WhatsApp integrados"
 )
 
 # Configurar CORS
@@ -37,13 +37,14 @@ app.add_middleware(
 # Instancias globales
 agent: BotAgent = None
 telegram_manager = None
+whatsapp_manager = None
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Inicialización al arrancar - incluye Telegram automáticamente"""
-    global agent, telegram_manager
-    logger.info("🚀 Iniciando Bot Agent con Telegram integrado...")
+    """Inicialización al arrancar - incluye Telegram y WhatsApp automáticamente"""
+    global agent, telegram_manager, whatsapp_manager
+    logger.info("🚀 Iniciando Bot Agent con múltiples plataformas...")
 
     print(f"📡 API: {settings.API_HOST}:{settings.API_PORT}")
     print(f"🔗 Open Web UI: {settings.OPENWEBUI_BASE_URL}")
@@ -57,13 +58,44 @@ async def startup_event():
 
         # Inicializar Telegram automáticamente
         if settings.TELEGRAM_BOT_TOKEN:
-            logger.info("📱 Inicializando Telegram...")
-            from .core.telegram_manager import TelegramManager
+            try:
+                logger.info("📱 Inicializando Telegram...")
+                from .core.telegram_manager import TelegramManager
 
-            telegram_manager = TelegramManager(agent)
-            await telegram_manager.initialize()
+                telegram_manager = TelegramManager(agent)
+                await telegram_manager.initialize()
+                logger.info("✅ Telegram inicializado correctamente")
+            except ImportError as e:
+                logger.error(f"❌ Error importando TelegramManager: {e}")
+                logger.error("💡 Verifica que existe app/core/telegram_manager.py")
+            except Exception as e:
+                logger.error(f"❌ Error inicializando Telegram: {e}")
         else:
             logger.info("ℹ️ Telegram no configurado (TELEGRAM_BOT_TOKEN faltante)")
+
+        # Inicializar WhatsApp automáticamente
+        try:
+            logger.info("💬 Inicializando WhatsApp...")
+            from .core.whatsapp_manager import WhatsAppManager
+
+            whatsapp_manager = WhatsAppManager(agent)
+            await whatsapp_manager.initialize("auto")
+
+            status = whatsapp_manager.get_status()
+            if status.get("status") in ["running_api", "running_web"]:
+                method = status.get("active_adapter", "unknown")
+                logger.info(f"✅ WhatsApp activo via {method.upper()}")
+            else:
+                logger.info("ℹ️ WhatsApp no configurado o falló inicialización")
+
+        except ImportError as e:
+            logger.error(f"❌ Error importando WhatsAppManager: {e}")
+            logger.error("💡 Faltan archivos de WhatsApp:")
+            logger.error("   - app/core/whatsapp_manager.py")
+            logger.error("   - app/adapters/whatsapp_api.py")
+            logger.error("   - app/adapters/whatsapp_web.py")
+        except Exception as e:
+            logger.error(f"❌ Error inicializando WhatsApp: {e}")
 
         # Verificar conectividad general
         health = await agent.health_check()
@@ -73,11 +105,26 @@ async def startup_event():
             logger.info("✅ Todos los componentes están saludables")
 
         print("\n🎉 ¡Bot Agent listo!")
+
+        # Estado de Telegram
         if telegram_manager and telegram_manager.get_status().get("status") == "running":
             print("📱 Telegram: ✅ Activo y funcionando")
             print("💡 Busca tu bot en Telegram y empieza a chatear")
         else:
-            print("📱 Telegram: ⚠️ No configurado")
+            print("📱 Telegram: ⚠️ No configurado o falló")
+
+        # Estado de WhatsApp
+        if whatsapp_manager:
+            status = whatsapp_manager.get_status()
+            if status.get("status") in ["running_api", "running_web"]:
+                method = status.get("active_adapter", "unknown")
+                print(f"💬 WhatsApp: ✅ Activo via {method.upper()}")
+                if method == "web":
+                    print("💡 Si es primera vez, escanea el QR que aparece arriba")
+            else:
+                print("💬 WhatsApp: ⚠️ No configurado o falló")
+        else:
+            print("💬 WhatsApp: ⚠️ No inicializado (archivos faltantes)")
         print()
 
     except Exception as e:
@@ -87,13 +134,23 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Limpieza al cerrar - incluye Telegram"""
-    global telegram_manager
+    """Limpieza al cerrar - incluye Telegram y WhatsApp"""
+    global telegram_manager, whatsapp_manager
     logger.info("👋 Cerrando Bot Agent...")
 
     # Cerrar Telegram si está activo
     if telegram_manager:
-        await telegram_manager.shutdown()
+        try:
+            await telegram_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error cerrando Telegram: {e}")
+
+    # Cerrar WhatsApp si está activo
+    if whatsapp_manager:
+        try:
+            await whatsapp_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error cerrando WhatsApp: {e}")
 
 
 def get_agent() -> BotAgent:
@@ -107,9 +164,22 @@ def get_agent() -> BotAgent:
 async def root():
     """Endpoint raíz con información del servicio"""
     telegram_status = "disabled"
+    whatsapp_status = "disabled"
+
     if telegram_manager:
-        status = telegram_manager.get_status()
-        telegram_status = status.get("status", "unknown")
+        try:
+            status = telegram_manager.get_status()
+            telegram_status = status.get("status", "unknown")
+        except Exception:
+            telegram_status = "error"
+
+    # Estado de WhatsApp
+    if whatsapp_manager:
+        try:
+            status = whatsapp_manager.get_status()
+            whatsapp_status = status.get("status", "unknown")
+        except Exception:
+            whatsapp_status = "error"
 
     platforms_enabled = {
         "telegram": {
@@ -118,8 +188,9 @@ async def root():
             "method": "polling" if settings.TELEGRAM_BOT_TOKEN else "none"
         },
         "whatsapp": {
-            "configured": bool(settings.WHATSAPP_ACCESS_TOKEN),
-            "method": "webhook" if settings.WHATSAPP_ACCESS_TOKEN else "none"
+            "configured": True,  # WhatsApp siempre está "disponible"
+            "status": whatsapp_status,
+            "method": whatsapp_manager.preferred_method if whatsapp_manager else "none"
         },
         "discord": {
             "configured": bool(settings.DISCORD_BOT_TOKEN),
@@ -138,25 +209,34 @@ async def root():
             "health": "/health",
             "docs": "/docs",
             "sessions": "/sessions",
-            "telegram_status": "/telegram/status"
+            "telegram_status": "/telegram/status",
+            "whatsapp_status": "/whatsapp/status"
         }
     }
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check(agent: BotAgent = Depends(get_agent)):
-    """Health check completo del sistema incluyendo Telegram"""
+    """Health check completo del sistema incluyendo Telegram y WhatsApp"""
     try:
         health = await agent.health_check()
 
         # Añadir estado de Telegram
         if telegram_manager:
-            telegram_status = telegram_manager.get_status()
-            health["components"]["telegram"] = {
-                "status": "healthy" if telegram_status.get("status") == "running" else "inactive",
-                "enabled": telegram_status.get("enabled", False),
-                "running": telegram_status.get("running", False)
-            }
+            try:
+                telegram_status = telegram_manager.get_status()
+                health["components"]["telegram"] = {
+                    "status": "healthy" if telegram_status.get("status") == "running" else "inactive",
+                    "enabled": telegram_status.get("enabled", False),
+                    "running": telegram_status.get("running", False)
+                }
+            except Exception as e:
+                health["components"]["telegram"] = {
+                    "status": "error",
+                    "enabled": False,
+                    "running": False,
+                    "error": str(e)
+                }
         else:
             health["components"]["telegram"] = {
                 "status": "disabled",
@@ -164,8 +244,37 @@ async def health_check(agent: BotAgent = Depends(get_agent)):
                 "running": False
             }
 
+        # Añadir estado de WhatsApp
+        if whatsapp_manager:
+            try:
+                whatsapp_status = whatsapp_manager.get_status()
+                health["components"]["whatsapp"] = {
+                    "status": "healthy" if whatsapp_status.get("status") in ["running_api", "running_web"] else "inactive",
+                    "enabled": True,
+                    "method": whatsapp_status.get("active_adapter", "none"),
+                    "running": whatsapp_status.get("status") != "inactive"
+                }
+            except Exception as e:
+                health["components"]["whatsapp"] = {
+                    "status": "error",
+                    "enabled": False,
+                    "running": False,
+                    "error": str(e)
+                }
+        else:
+            health["components"]["whatsapp"] = {
+                "status": "disabled",
+                "enabled": False,
+                "running": False,
+                "missing_files": [
+                    "app/core/whatsapp_manager.py",
+                    "app/adapters/whatsapp_api.py",
+                    "app/adapters/whatsapp_web.py"
+                ]
+            }
+
         # El sistema está saludable si los componentes core están bien
-        # Telegram es opcional
+        # WhatsApp y Telegram son opcionales
         core_healthy = (
                 health["components"]["openwebui"]["status"] == "healthy" and
                 health["components"]["redis"]["status"] == "healthy"
@@ -191,13 +300,95 @@ async def get_telegram_status():
             "message": "Telegram manager not initialized"
         }
 
-    status = telegram_manager.get_status()
+    try:
+        status = telegram_manager.get_status()
+        return {
+            "telegram": status,
+            "token_configured": bool(settings.TELEGRAM_BOT_TOKEN),
+            "message": "Telegram is running via polling" if status.get("running") else "Telegram is not active"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "enabled": False,
+            "message": f"Error getting Telegram status: {str(e)}"
+        }
 
-    return {
-        "telegram": status,
-        "token_configured": bool(settings.TELEGRAM_BOT_TOKEN),
-        "message": "Telegram is running via polling" if status.get("running") else "Telegram is not active"
-    }
+
+# Endpoints de WhatsApp
+@app.get("/whatsapp/status")
+async def get_whatsapp_status():
+    """Estado específico de WhatsApp"""
+    if not whatsapp_manager:
+        return {
+            "status": "not_initialized",
+            "message": "WhatsApp manager not initialized - missing required files",
+            "missing_files": [
+                "app/core/whatsapp_manager.py",
+                "app/adapters/whatsapp_api.py",
+                "app/adapters/whatsapp_web.py"
+            ]
+        }
+
+    try:
+        status = whatsapp_manager.get_status()
+        return {
+            "whatsapp": status,
+            "message": f"WhatsApp running via {status.get('active_adapter', 'none')}" if status.get(
+                'status') != 'inactive' else "WhatsApp not active"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error getting WhatsApp status: {str(e)}"
+        }
+
+
+@app.post("/whatsapp/restart")
+async def restart_whatsapp():
+    """Reinicia el servicio de WhatsApp"""
+    global whatsapp_manager
+
+    try:
+        if not whatsapp_manager:
+            from .core.whatsapp_manager import WhatsAppManager
+            whatsapp_manager = WhatsAppManager(agent)
+
+        status = await whatsapp_manager.restart()
+        return {
+            "message": "WhatsApp restarted successfully",
+            "status": status
+        }
+
+    except ImportError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"WhatsApp files missing: {str(e)}. Create the required WhatsApp adapter files first."
+        )
+    except Exception as e:
+        logger.error(f"Error restarting WhatsApp: {e}")
+        raise HTTPException(status_code=500, detail=f"Error restarting WhatsApp: {str(e)}")
+
+
+@app.post("/whatsapp/switch-method")
+async def switch_whatsapp_method(request: dict):
+    """Cambia entre método API y Web"""
+    if not whatsapp_manager:
+        raise HTTPException(status_code=400, detail="WhatsApp manager not initialized")
+
+    method = request.get("method", "auto")
+
+    if method not in ["api", "web", "auto"]:
+        raise HTTPException(status_code=400, detail="Method must be 'api', 'web', or 'auto'")
+
+    try:
+        status = await whatsapp_manager.restart(method)
+        return {
+            "message": f"WhatsApp switched to method: {method}",
+            "status": status
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error switching method: {str(e)}")
 
 
 @app.post("/telegram/restart")
@@ -301,7 +492,44 @@ async def get_sessions_count(agent: BotAgent = Depends(get_agent)):
         raise HTTPException(status_code=500, detail="Error getting session count")
 
 
-# Webhook de Telegram (para compatibilidad, aunque usamos polling)
+# Webhook de WhatsApp
+@app.get("/webhook/whatsapp")
+async def whatsapp_webhook_verify(
+        request: Request,
+        hub_mode: str = Query(None, alias="hub.mode"),
+        hub_challenge: str = Query(None, alias="hub.challenge"),
+        hub_verify_token: str = Query(None, alias="hub.verify_token")
+):
+    """Verificación de webhook de WhatsApp (GET)"""
+    logger.info(f"Webhook verification request: mode={hub_mode}, token={hub_verify_token}")
+
+    # Verificar que sea una petición de suscripción válida
+    if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
+        logger.info("✅ Webhook verificado exitosamente")
+        return int(hub_challenge) if hub_challenge and hub_challenge.isdigit() else hub_challenge
+    else:
+        logger.error(
+            f"❌ Token de verificación inválido: esperado={settings.WHATSAPP_VERIFY_TOKEN}, recibido={hub_verify_token}")
+        raise HTTPException(status_code=403, detail="Invalid verify token")
+
+
+@app.post("/webhook/whatsapp")
+async def whatsapp_webhook_message(request: dict):
+    """Webhook para mensajes de WhatsApp (POST)"""
+    if whatsapp_manager and whatsapp_manager.get_active_adapter():
+        try:
+            return await whatsapp_manager.handle_webhook(request)
+        except Exception as e:
+            logger.error(f"Error en webhook WhatsApp: {e}")
+            return {"status": "error", "message": "Internal server error"}
+    else:
+        return {
+            "status": "whatsapp_not_configured",
+            "message": "WhatsApp manager not initialized or no active adapter"
+        }
+
+
+# Webhook de Telegram
 if settings.TELEGRAM_BOT_TOKEN:
     @app.post("/webhook/telegram")
     async def telegram_webhook(request: dict):
@@ -315,22 +543,7 @@ if settings.TELEGRAM_BOT_TOKEN:
         else:
             return {"status": "telegram_not_configured"}
 
-# Otros webhooks condicionales
-if settings.WHATSAPP_ACCESS_TOKEN:
-    @app.post("/webhook/whatsapp")
-    async def whatsapp_webhook(
-            request: dict,
-            agent: BotAgent = Depends(get_agent)
-    ):
-        """Webhook para WhatsApp Business API"""
-        try:
-            from .adapters.whatsapp import WhatsAppAdapter
-            adapter = WhatsAppAdapter(agent)
-            return await adapter.handle_webhook(request)
-        except Exception as e:
-            logger.error(f"Error en webhook WhatsApp: {e}")
-            return {"status": "error", "message": "Internal server error"}
-
+# Discord webhook
 if settings.DISCORD_BOT_TOKEN:
     @app.post("/webhook/discord")
     async def discord_webhook(
