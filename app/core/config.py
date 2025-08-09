@@ -5,10 +5,11 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
-    # Open Web UI Configuration
-    OPENWEBUI_BASE_URL: str
-    OPENWEBUI_API_KEY: Optional[str] = None
-    MODEL_NAME: str
+    # Raztor/Mentha Configuration
+    API_KEY: str  # Requerido desde .env
+    BASE_URL: str = "https://llm.raztor.cl"  # Valor por defecto OK
+    MODEL_NAME: str = "NVD.llama3.1:8b"  # Valor por defecto OK  
+    COLLECTION_ID: str  # Requerido desde .env
 
     # Redis Configuration
     REDIS_URL: str = "redis://localhost:6379"

@@ -18,7 +18,7 @@ def main():
     print("🚀 Iniciando Bot Agent...")
 
     # Verificaciones básicas
-    required_vars = ['OPENWEBUI_BASE_URL', 'MODEL_NAME']
+    required_vars = ['API_KEY', 'COLLECTION_ID']
     missing = [var for var in required_vars if not getattr(settings, var, None)]
 
     if missing:

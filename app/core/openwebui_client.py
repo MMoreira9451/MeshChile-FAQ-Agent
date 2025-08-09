@@ -5,11 +5,12 @@ from typing import Dict, List, Optional
 from .config import settings
 
 
-class OpenWebUIClient:
+class MenthaClient:
     def __init__(self):
-        self.base_url = settings.OPENWEBUI_BASE_URL.rstrip('/')
-        self.api_key = settings.OPENWEBUI_API_KEY
+        self.base_url = settings.BASE_URL.rstrip('/')
+        self.api_key = settings.API_KEY
         self.model_name = settings.MODEL_NAME
+        self.collection_id = settings.COLLECTION_ID
         self.timeout = settings.MODEL_TIMEOUT
         self.temperature = settings.MODEL_TEMPERATURE
 
@@ -32,7 +33,11 @@ class OpenWebUIClient:
             "model": self.model_name,
             "messages": messages,
             "stream": stream,
-            "temperature": self.temperature
+            "temperature": self.temperature,
+            "knowledge": {
+                "enabled": True,
+                "id": self.collection_id
+            }
         }
 
         try:
